@@ -1,0 +1,678 @@
+---
+title: "Startercode"
+author: "Rikke Kjems & Pernille Ryder"
+date: "4/28/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Setting up working directory and loading data
+```{r Setting up working directory and loading data}
+#Setting working directory
+
+#Pernille
+setwd("/Users/pernille/Desktop/DS_Exam")
+
+#Rikke
+#setwd("~/Library/Mobile Documents/com~apple~CloudDocs/Cognitive Science/10. Semester/Data Science/Exam")
+
+#Loading data
+data <- read.csv("weatherAUS.csv", header = TRUE, sep = ",", stringsAsFactors = TRUE)
+```
+
+
+
+#Loading libraries
+```{r Loading libraries}
+#Loading libraries
+
+library(ggplot2)
+library(dplyr)
+library(tsibble)
+library(feasts)
+library(fpp3)
+library(data.table)
+library(tidyverse)
+library(plotly)
+library(caret)
+library(magrittr)
+library(corrplot)
+library(caTools)
+library(pROC)
+library(ggthemes)
+library(cowplot)
+library(dplyr)
+library(tsibble)
+library(plyr)
+library(ggplot2)
+library(hydroTSM)
+library(lubridate)
+library(fable.prophet)
+library(features)
+library(forecast)
+
+```
+
+
+
+#Data Preprocessing
+```{r cars}
+set.seed(1023) 
+#Making a subset without Date, Location, RainToday and Raintoday. as these variables are essential.
+weather_data <- subset(data, select = -c(Date, Location, RainToday, RainTomorrow))
+colnames(weather_data) #printing the column names
+summary(weather_data)
+```
+
+```{r Histograms of skewness} 
+#Check the skewness of data
+hist(weather_data$MaxTemp)
+hist(weather_data$MinTemp)
+hist(weather_data$Evaporation)
+hist(weather_data$Sunshine)
+hist(weather_data$WindGustSpeed)
+hist(weather_data$WindSpeed9am)
+hist(weather_data$WindSpeed3pm)
+hist(weather_data$Humidity9am)
+hist(weather_data$Humidity3pm)
+hist(weather_data$Temp9am)
+hist(weather_data$Temp3pm)
+hist(weather_data$Pressure9am)
+hist(weather_data$Pressure3pm)
+
+```
+
+```{r feature extraction -> chisquare values}
+#2.Feature Extraction
+#Get the categorical variables
+#2.1Chi-Square to check whether the variables are dependent on RainTomorrow
+
+#Selecting the factorial variables
+factor_vars1 <- names(which(sapply(weather_data, class) == "factor"))
+factor_vars1
+
+#Raintomorrow is removed
+factor_vars1 <- setdiff(factor_vars1, "Rainfall")
+factor_vars1
+
+#chi sqaured test
+chisq_test_res <- lapply(factor_vars1, function(x) { 
+  chisq.test(weather_data[,x], weather_data[, "Rainfall"], simulate.p.value = TRUE)
+})
+names(chisq_test_res) <- factor_vars1
+chisq_test_res
+
+```
+
+```{r Removing "WindGustDir" "WindDir9am" & "WindDir3pm"}
+
+#Remove Categorical variables from data set
+numeric_vars <- subset(weather_data, select = -c(WindDir9am, WindDir3pm, WindGustDir))
+colnames(numeric_vars)
+
+```
+
+```{r Correlation plot}
+#Feature Extraction for numeric variables
+
+#Ensuring no NA's in order to make correlation plot
+numeric_vars <- numeric_vars[complete.cases(numeric_vars),] 
+
+#Calculating correlation values for each variable 
+numeric_vars_cor <- cor(numeric_vars)
+
+#correlation plot
+corrplot(numeric_vars_cor, method = "pie")
+
+```
+
+```{r Calculating amount of NA in each column}
+#Calculating how many NA in % in each column
+apply(data, 2, function(col)sum(is.na(col))/length(col))*100
+
+#Every variable with more than 15 % of NA will be excluded
+#The three categorical variables will also be excluded based on the pearson correlation calculation done above.
+```
+
+```{r Making subset with only the variables we want}
+#Making subset data with only the variables we want. We exclude every variable with more than 15 % NA
+
+final_data <- subset(data, select = -c(Evaporation, Sunshine, Cloud9am, Cloud3pm, WindGustDir, WindDir9am, WindDir3pm, Temp9am, Temp3pm, MinTemp, Pressure3pm, Humidity3pm))
+
+final_data <- final_data[complete.cases(final_data),]
+```
+
+```{r Creting time columns with different time configurations}
+
+# Now we create different columns for different time configurations
+
+# Making a variable for Year
+final_data  <- mutate(final_data , Year = year(Date))
+
+final_data$Year <- factor(final_data$Year)
+
+
+```
+
+```{r plotting rainfull over time for all locations}
+#Plotting rainfall over time for each location
+ggplot() + geom_line(data = final_data, aes(x = Date, y = Rainfall, color = Location), group=1)
+
+```
+
+
+```{r Making day column}
+#New column with 0-365 for each year
+
+date <- ymd(final_data$Date)
+
+days <- yday(date) - 1 # so Jan 1 = day 0 
+
+final_data  <- mutate(final_data , Day = days) # Adding list 'days'-list to DF
+
+final_data$Day <- factor(final_data$Day)
+```
+
+```{r Making a tsibble}
+tsb <- final_data %>%
+  as_tibble()
+
+Rain <- tsb %>%
+  mutate(Date = as.Date(Date)) %>%
+  as_tsibble(index = Date, key = 'Location')
+```
+
+
+```{r Plot of rain across all years}
+#Vi skal have smidt nogle lables på her
+
+ggplot() + geom_line(data = Rain, aes(x = Day, y = Rainfall), group=1) +
+  facet_wrap(~Year)
+```
+
+#Checking gaps in data
+
+```{r checking for gaps in data}
+#has_gaps(Rain, .full = TRUE)
+#scan_gaps(Rain)
+
+
+rain_gaps <- Rain %>% 
+  count_gaps(.full = TRUE)
+rain_gaps
+```
+
+```{r visualising gaps}
+ggplot(rain_gaps, aes(x = Location, colour = Location)) +
+  geom_linerange(aes(ymin = .from, ymax = .to)) +
+  geom_point(aes(y = .from)) +
+  geom_point(aes(y = .to)) +
+  coord_flip() +
+  theme(legend.position = "bottom")
+
+#Plot shows huge gab in data from Sydney from 2009-2011. We choose to exclude all data from before 2011.
+#Many individual gabs and a huge long one i CoffsHarbour. This location will be excluded. 
+#We move on with data from 2011-2017 from location Wollongong, WaggaWagga, Sydney, Albury
+```
+
+```{r Removing data from before 2011 and exclude CoffsHarbour}
+#Removing data from before 2011 and exclude CoffsHarbour:
+#Rain <- Rain%>%filter(Year%in%c(2011:2017)) 
+
+#Rain <- Rain%>%filter(Location%in%c("Wollongong", "WaggaWagga", "Sydney", "Albury")) 
+
+new_rain_gaps <- Rain %>% 
+  count_gaps(.full = TRUE)
+new_rain_gaps
+ggplot(new_rain_gaps, aes(x = Location, colour = Location)) +
+  geom_linerange(aes(ymin = .from, ymax = .to)) +
+  geom_point(aes(y = .from)) +
+  geom_point(aes(y = .to)) +
+  coord_flip() +
+  theme(legend.position = "bottom")
+
+```
+
+```{r Handle implicit missingness}
+
+#Filling out the gaps in the Date column, returns NA in all other columns where there is gap
+rain_full <- Rain %>% 
+  fill_gaps(.full = TRUE)
+rain_full
+
+#Difference between rain_gap og rain_full:
+#8768-8197 = 571
+```
+
+```{r Filling out gaps in Location, RainToday and RainTomorrow}
+#Filling out gaps in Location, RainToday and RainTomorrow with previous values
+
+rain_full <- rain_full %>% 
+  group_by_key() %>% 
+  fill_gaps() %>%
+  tidyr::fill(Location, .direction = "down")
+
+rain_full <- rain_full %>% 
+  group_by_key() %>% 
+  fill_gaps() %>%
+  tidyr::fill(RainToday, .direction = "down")
+
+rain_full <- rain_full %>% 
+  group_by_key() %>% 
+  fill_gaps() %>%
+  tidyr::fill(RainTomorrow, .direction = "down")
+
+```
+
+```{r Filling out gaps in remaining variables}
+
+#Hvis i gør som jeg lige skrev tager i mean på tværs af alle sites/områder i har – et ’globalt’ mean. Hvis i til gengæld #laver group_by_key() og fill_gaps, skulle den gerne udregne et mean per område, og indsætte det i stedet. Dvs. at hvis #der er stor forskel i hvor meget det regner i de forskellige områder, vil fill_gaps() give en meget bedre imputation.
+
+#Filling out gaps by using group_by_key and replace.na for finding the mean for each key=Location
+
+rain_done <- rain_full %>% 
+  as_tsibble(index=Date, key=Location) %>% 
+  group_by_key() %>% 
+  mutate(MaxTemp = tidyr::replace_na(MaxTemp, mean(MaxTemp, na.rm=T)))%>%
+  mutate(WindGustSpeed = tidyr::replace_na(WindGustSpeed, mean(WindGustSpeed, na.rm=T)))%>%
+  mutate(WindSpeed9am = tidyr::replace_na(WindSpeed9am, mean(WindSpeed9am, na.rm=T)))%>%
+  mutate(WindSpeed3pm = tidyr::replace_na(WindSpeed3pm, mean(WindSpeed3pm, na.rm=T)))%>%
+  mutate(Humidity9am = tidyr::replace_na(Humidity9am, mean(Humidity9am, na.rm=T)))%>%
+  mutate(Pressure9am = tidyr::replace_na(Pressure9am, mean(Pressure9am, na.rm=T)))%>%
+  mutate(Rainfall = tidyr::replace_na(Rainfall, mean(Rainfall, na.rm=T)))
+
+```
+
+```{r Filling out gaps in time columns}
+#Filling out the gaps in Day column by simply making the columns again
+
+#New column with 0-365 for each year
+
+date <- ymd(rain_done$Date)
+
+days <- yday(date) - 1 # so Jan 1 = day 0 
+
+rain_done  <- mutate(rain_done , Day = days) # Adding list 'days'-list to out DF
+
+rain_done$Day <- factor(rain_done$Day)
+
+# Making a column for Year
+rain_done  <- mutate(rain_done , Year = year(Date))
+
+rain_done$Year <- factor(rain_done$Year)
+```
+
+```{r Making rain_done into a tsibble}
+#Making rain_done into a tsibble
+rain_done <- rain_done %>%
+  mutate(Date = as.Date(Date)) %>%
+  as_tsibble(index = Date, key = 'Location')
+rain_done
+```
+
+```{r Making sure that all gaps are filled}
+#Making sure that all gaps are filled
+has_gaps(rain_done, .full = TRUE)
+scan_gaps(rain_done)
+rain_gaps <- rain_done %>% 
+  count_gaps(.full = TRUE)
+rain_gaps
+
+ggplot(rain_gaps, aes(x = Location, colour = Location)) +
+  geom_linerange(aes(ymin = .from, ymax = .to)) +
+  geom_point(aes(y = .from)) +
+  geom_point(aes(y = .to)) +
+  coord_flip() +
+  theme(legend.position = "bottom")
+
+#Plot is empty because of no gaps
+```
+
+
+#Visualising some data
+```{r Rainfall over time}
+#Plot Time Series Data
+rain_done%>%
+  #filter(Location=="Sydney")%>%
+autoplot(Rainfall) + ylab("Rainfall") + xlab("Day")+
+  #scale_x_date(date_labels = '%Y', breaks = '1 year') +
+  theme_bw() + ggtitle("Rainfall in Austrlia")
+  #facet_wrap(~Year)
+  
+
+#ggplot() + geom_line(data = rain_done, aes(x = Day, y = Rainfall), group=1) +
+ # facet_wrap(~Year)
+
+```
+
+#ALbury subset
+```{r}
+
+albury = rain_done %>%
+  filter(Location =='Albury')
+
+albury <- subset(albury, select = -c(Location, RainToday, RainTomorrow))
+
+```
+
+```{r Albury}
+
+albury %>%
+  autoplot(Rainfall)
+
+```
+
+```{r Albury}
+ggplot() + geom_line(data = albury, aes(x = Day, y = Rainfall), group=1) +
+  facet_wrap(~Year)
+
+#The facet wrap plot indicates that 2007, 2008, and 2017 is not full years, and they are therefore excluded in our albury data set. 
+
+
+`````
+
+
+````{r data filtering}
+#on basis of the facet wrap plot
+albury<- albury[albury$Year %in% c('2009','2010','2011','2012','2013','2014','2015','2016'), ]
+
+```````
+
+
+```{r new facet wrap}
+
+ggplot() + geom_line(data = albury, aes(x = Day, y = Rainfall), group=1) +
+  facet_wrap(~Year)
+
+
+
+`````
+
+#Checking for seasonality & trends
+```{r gg_season plot}
+albury %>%
+  gg_season(Rainfall, labels = "both") +
+  labs(y = "Rainfall",
+       title = "Seasonal plot: Rainfall over time in Albury")
+
+#filter out one city
+```
+
+```{r ACF Rainfall}
+albury %>%
+  ACF(Rainfall, lag_max = 365)
+
+albury%>%
+  ACF(Rainfall, lag_max=365)%>%
+  autoplot() + labs(title="Rainfall in Albury")
+
+```
+
+# Albury
+```{r STL plot for Rainfall}
+dcmp <- albury %>%
+  model(stl = STL(Rainfall~season(window=8))) #Because we have eight seasons/years
+components(dcmp)%>%
+  autoplot()
+
+```
+
+
+#Arima model
+
+````{r}
+albury %>%
+  model(ARIMA(Rainfall)) %>% 
+          forecast(h = "2 years") %>% 
+          autoplot(albury) + labs(title="ARIMA model forecasting 2 years")
+``````
+
+#Check Arima model
+```{r}
+
+albury%>%
+  model(ARIMA(Rainfall)) %>%
+   gg_tsresiduals() + labs(title="ARIMA model performance")
+
+```
+
+
+# Mean model 
+````{r}
+albury %>%
+  model(MEAN(Rainfall)) %>% 
+          forecast(h = "2 years") %>% 
+          autoplot(albury) + labs(title="Mean model forecasting 2 years")
+``````
+
+#Check mean  model
+```{r}
+
+albury%>%
+  model(MEAN(Rainfall)) %>% 
+   gg_tsresiduals() + labs(title="Mean model performance")
+
+```
+
+
+#TSLM
+````{r}
+albury %>%
+  model(TSLM(Rainfall)) %>% 
+          forecast(h = "2 years") %>% 
+          autoplot(albury) + labs(title='TSLM model forecasting 2 years')
+``````
+
+#Check TSLM  model
+```{r}
+
+albury%>%
+  model(TSLM(Rainfall)) %>% 
+   gg_tsresiduals() + labs(title='TSLM model performance')
+
+```
+
+#Vector Autoregression
+```{r Vector autoregression model}
+
+fit <- albury %>%
+  model(VAR(vars(Rainfall)))
+
+glance(fit)
+
+
+fit %>%
+  augment() %>%
+  ACF(.innov) %>%
+  autoplot() + labs(title='VAR model forecasting 2 years')
+
+
+#Lag 29 is significant as the only one. Meaning this model is doing okay.
+`````
+
+```{r Vector autoregression model plot}
+
+fit %>%
+  forecast(h = '2 years') %>%
+  autoplot(albury) + labs(title='VAR model forecasting 2 years')
+
+````
+```{r}
+
+albury%>%
+  model(VAR(vars(Rainfall))) %>% 
+   gg_tsresiduals() + labs(title='VAR model performance')
+
+````
+
+
+#Test and traning set -fpp3 5.8
+
+```{r}
+
+#albury_test<- albury[albury$Year %in% c('2015','2016'), ]
+
+albury_train<- albury[albury$Year %in% c('2009','2010','2011','2012','2013','2014'), ]
+
+
+`````
+
+
+```{r}
+
+albury_fit <- albury_train %>%
+  model(
+    mean = MEAN(Rainfall),
+    tslm = TSLM(Rainfall ~ trend()),
+    arima = ARIMA(Rainfall),
+  )
+
+``````
+
+```{r}
+
+albury_fc <- albury_fit %>%
+  forecast(h = '2 years')
+  
+
+````
+
+
+````{r}
+
+#Checking accuracy
+albury_fc%>%
+  accuracy(albury)%>%
+  arrange(MASE)
+
+
+````
+```{r}
+#Plot test/train
+albury_train %>%
+    model(
+    mean = MEAN(Rainfall),
+    tslm = TSLM(Rainfall ~ trend()),
+    arima = ARIMA(Rainfall),
+  ) %>%
+  forecast(h = '2 years') %>%
+  autoplot(albury) + labs(title='Mean, TSLM, and ARIMA fitted on train data')
+
+`````
+
+
+#VAR model fitted to train data 
+
+```{r}
+var_fit <- albury_train %>%
+  model(VAR(vars(Rainfall)))
+
+````
+
+```{r}
+
+var_fc <- var_fit %>%
+  forecast(h = '2 years')
+
+````
+  
+```{r}
+var_fc %>%
+accuracy(albury)%>%
+arrange(MASE)
+
+
+````
+```{r}
+
+albury_train %>%
+  model(VAR(vars(Rainfall))) %>%
+ forecast(h = '2 years') %>%
+  autoplot(albury) + labs(title = 'VAR model fitted on train data')
+````
+
+#Differencing albury data (removing trend and seasonality)
+```{r}
+
+#After one differencing the seasonality is removed
+albury %>%
+  gg_tsdisplay(difference(Rainfall, 12), #Annual change in rainfall, 365 if daily.
+               plot_type='partial', lag=8)
+
+```
+#Vector Autoregression after difference 
+```{r Vector autoregression model}
+
+fit <- albury %>%
+  model(VAR(vars(Rainfall)))
+
+glance(fit)
+
+
+fit %>%
+  augment() %>%
+  ACF(.innov) %>%
+  autoplot() + labs(title='VAR model performance after difference')
+
+`````
+````{r}
+
+fit %>%
+  forecast(h = '2 years') %>%
+  autoplot(albury) + labs(title='VAR model forecasting 2 years')
+`````
+
+
+```{r}
+
+
+albury%>%
+  model(VAR(vars(Rainfall))) %>% 
+   gg_tsresiduals() + labs(title='VAR model performance')
+
+`````
+
+# Mean, tslm and arima after difference
+```{r}
+albury %>%
+    model(
+    mean = MEAN(Rainfall),
+    tslm = TSLM(Rainfall ~ trend()),
+    arima = ARIMA(Rainfall)
+  ) %>%
+  forecast(h='2 years') %>%
+  autoplot(albury) + labs(title='Mean, TSLM, ARIMA forecasting after differencing')
+`````
+
+#check models after difference
+```{r}
+
+albury%>%
+  model(TSLM(Rainfall)) %>% 
+   gg_tsresiduals()
+
+`````
+
+```{r}
+
+albury%>%
+  model(MEAN(Rainfall)) %>% 
+   gg_tsresiduals()
+
+`````
+
+
+```{r}
+
+albury%>%
+  model(ARIMA(Rainfall)) %>% 
+   gg_tsresiduals()
+
+`````
+
+
+
+
